@@ -40,6 +40,7 @@ class GeoNote {
   final String mode;
   final bool isForSelf;
   final DateTime? triggerDate;
+  final bool hasBeenViewed;
 
   GeoNote({
     required this.id,
@@ -50,6 +51,7 @@ class GeoNote {
     required this.mode,
     required this.isForSelf,
     this.triggerDate,
+    this.hasBeenViewed = false,
   });
 
   Map<String, dynamic> toJson() => {
@@ -63,6 +65,7 @@ class GeoNote {
         'mode': mode,
         'isForSelf': isForSelf,
         'triggerDate': triggerDate?.toIso8601String(),
+        'hasBeenViewed': hasBeenViewed,
       };
 
   factory GeoNote.fromJson(Map<String, dynamic> json) => GeoNote(
@@ -77,12 +80,13 @@ class GeoNote {
         isForSelf: json['isForSelf'],
         triggerDate:
             json['triggerDate'] != null ? DateTime.parse(json['triggerDate']) : null,
+        hasBeenViewed: json['hasBeenViewed'] ?? false,
       );
 }
 
 class NotesService {
   static const String _notesBox = 'geo_notes';
-  static const String _keyString = 'my32lengthsupersecretkey!!!123456';
+  static const String _keyString = 'my32lengthsupersecretkey!!123456';
 
   static final encrypt.Key _aesKey = encrypt.Key.fromUtf8(_keyString);
   static final encrypt.Encrypter _encrypter = encrypt.Encrypter(encrypt.AES(_aesKey));
@@ -135,6 +139,60 @@ class NotesService {
     final box = await Hive.openBox<String>(_notesBox);
     await box.delete(id);
   }
+
+  static Future<void> markNoteAsViewed(String id) async {
+    final box = await Hive.openBox<String>(_notesBox);
+    final noteJson = box.get(id);
+    if (noteJson != null) {
+      final noteMap = jsonDecode(noteJson);
+      noteMap['hasBeenViewed'] = true;
+      await box.put(id, jsonEncode(noteMap));
+    }
+  }
+
+  // Check if a note's trigger conditions are met
+  static bool isNoteTriggered(GeoNote note, LatLng? currentLocation) {
+    // Check date trigger
+    if (note.mode.contains('Date') && note.triggerDate != null) {
+      if (DateTime.now().isBefore(note.triggerDate!)) {
+        return false;
+      }
+    }
+
+    // Check location trigger
+    if (note.mode.contains('Geofence') && note.location != null && currentLocation != null) {
+      final distance = _calculateDistance(
+        currentLocation.latitude,
+        currentLocation.longitude,
+        note.location!.latitude,
+        note.location!.longitude,
+      );
+      
+      // If we're not within 100 meters of the target location
+      if (distance > 100) { // 100 meters threshold
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  static double _calculateDistance(double lat1, double lon1, double lat2, double lon2) {
+    const earthRadius = 6371000; // meters
+    final dLat = _toRadians(lat2 - lat1);
+    final dLon = _toRadians(lon2 - lon1);
+
+    final a = sin(dLat / 2) * sin(dLat / 2) +
+        cos(_toRadians(lat1)) * cos(_toRadians(lat2)) *
+        sin(dLon / 2) * sin(dLon / 2);
+    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
+
+    return earthRadius * c;
+  }
+
+  static double _toRadians(double degree) {
+    return degree * pi / 180;
+  }
 }
 
 class HomePage extends StatefulWidget {
@@ -154,12 +212,21 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   String _errorMessage = '';
   DateTime? _selectedTriggerDate;
   final MapController _mapController = MapController();
+  List<GeoNote> _availableNotes = [];
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _initializeApp();
+    _startPeriodicChecks();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkForAvailableNotes();
+    }
   }
 
   @override
@@ -169,10 +236,21 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     super.dispose();
   }
 
+  void _startPeriodicChecks() {
+    // Check for available notes every 30 seconds
+    Future.delayed(const Duration(seconds: 30), () {
+      if (mounted) {
+        _checkForAvailableNotes();
+        _startPeriodicChecks();
+      }
+    });
+  }
+
   Future<void> _initializeApp() async {
     try {
       await _getCurrentLocation();
       await _loadNotes();
+      _checkForAvailableNotes();
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -238,6 +316,51 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _showSnackBar('Failed to load notes: $e', isError: true);
       }
     }
+  }
+
+  void _checkForAvailableNotes() {
+    if (_currentLocation == null) return;
+
+    final availableNotes = _savedNotes.where((note) {
+      return NotesService.isNoteTriggered(note, _currentLocation) && !note.hasBeenViewed;
+    }).toList();
+
+    if (mounted) {
+      setState(() {
+        _availableNotes = availableNotes;
+      });
+    }
+
+    // Show notification if there are new available notes
+    if (availableNotes.isNotEmpty && mounted) {
+      _showAvailableNotesNotification(availableNotes);
+    }
+  }
+
+  void _showAvailableNotesNotification(List<GeoNote> notes) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('New Notes Available!'),
+          content: Text('You have ${notes.length} note(s) that can now be viewed.'),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                _viewNotes(showAvailableOnly: true);
+              },
+              child: const Text('View Notes'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Dismiss'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   Future<void> _saveNote() async {
@@ -316,16 +439,24 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
-  void _viewNotes() {
+  void _viewNotes({bool showAvailableOnly = false}) {
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => NotesListPage(
           notes: _savedNotes,
+          currentLocation: _currentLocation,
           onDelete: (id) async {
             await NotesService.deleteNote(id);
             await _loadNotes();
+            _checkForAvailableNotes();
           },
+          onNoteViewed: (id) async {
+            await NotesService.markNoteAsViewed(id);
+            await _loadNotes();
+            _checkForAvailableNotes();
+          },
+          showAvailableOnly: showAvailableOnly,
         ),
       ),
     );
@@ -357,9 +488,37 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       appBar: AppBar(
         title: const Text('Secure Geo Notes'),
         actions: [
-          IconButton(
-            onPressed: _viewNotes, 
-            icon: const Icon(Icons.notes)
+          Stack(
+            children: [
+              IconButton(
+                onPressed: _viewNotes, 
+                icon: const Icon(Icons.notes)
+              ),
+              if (_availableNotes.isNotEmpty)
+                Positioned(
+                  right: 8,
+                  top: 8,
+                  child: Container(
+                    padding: const EdgeInsets.all(2),
+                    decoration: BoxDecoration(
+                      color: Colors.red,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    constraints: const BoxConstraints(
+                      minWidth: 14,
+                      minHeight: 14,
+                    ),
+                    child: Text(
+                      _availableNotes.length.toString(),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 8,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ),
+            ],
           ),
           IconButton(
             onPressed: _getCurrentLocation,
@@ -465,14 +624,56 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 }
 
-class NotesListPage extends StatelessWidget {
+class NotesListPage extends StatefulWidget {
   final List<GeoNote> notes;
+  final LatLng? currentLocation;
   final Function(String) onDelete;
+  final Function(String) onNoteViewed;
+  final bool showAvailableOnly;
 
-  const NotesListPage({super.key, required this.notes, required this.onDelete});
+  const NotesListPage({
+    super.key,
+    required this.notes,
+    this.currentLocation,
+    required this.onDelete,
+    required this.onNoteViewed,
+    this.showAvailableOnly = false,
+  });
+
+  @override
+  State<NotesListPage> createState() => _NotesListPageState();
+}
+
+class _NotesListPageState extends State<NotesListPage> {
+  late List<GeoNote> _filteredNotes;
+
+  @override
+  void initState() {
+    super.initState();
+    _filterNotes();
+  }
+
+  void _filterNotes() {
+    if (widget.showAvailableOnly) {
+      _filteredNotes = widget.notes.where((note) {
+        return NotesService.isNoteTriggered(note, widget.currentLocation) && !note.hasBeenViewed;
+      }).toList();
+    } else {
+      _filteredNotes = widget.notes;
+    }
+  }
 
   void _viewNote(BuildContext context, GeoNote note) {
+    // Check if note can be viewed
+    if (!NotesService.isNoteTriggered(note, widget.currentLocation)) {
+      _showCannotViewDialog(note);
+      return;
+    }
+
+    // Mark as viewed and show content
+    widget.onNoteViewed(note.id);
     final decrypted = NotesService.decryptNote(note);
+    
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
@@ -490,6 +691,8 @@ class NotesListPage extends StatelessWidget {
                     'Location: ${note.location!.latitude.toStringAsFixed(6)}, ${note.location!.longitude.toStringAsFixed(6)}'),
               if (note.triggerDate != null)
                 Text('Trigger: ${DateFormat('yyyy-MM-dd HH:mm').format(note.triggerDate!)}'),
+              if (note.hasBeenViewed)
+                const Text('Status: Viewed', style: TextStyle(color: Colors.green)),
             ],
           ),
         ),
@@ -498,7 +701,10 @@ class NotesListPage extends StatelessWidget {
           TextButton(
             onPressed: () async {
               Navigator.pop(context);
-              await onDelete(note.id);
+              await widget.onDelete(note.id);
+              setState(() {
+                _filterNotes();
+              });
             },
             child: const Text('Delete', style: TextStyle(color: Colors.red)),
           ),
@@ -507,21 +713,108 @@ class NotesListPage extends StatelessWidget {
     );
   }
 
+  void _showCannotViewDialog(GeoNote note) {
+    String message = 'This note cannot be viewed yet because:\n\n';
+    
+    if (note.mode.contains('Date') && note.triggerDate != null) {
+      if (DateTime.now().isBefore(note.triggerDate!)) {
+        message += '• The trigger date (${DateFormat('yyyy-MM-dd HH:mm').format(note.triggerDate!)}) has not been reached\n';
+      }
+    }
+
+    if (note.mode.contains('Geofence') && note.location != null) {
+      if (widget.currentLocation == null) {
+        message += '• Your current location is unavailable\n';
+      } else {
+        final distance = NotesService.isNoteTriggered(note, widget.currentLocation) 
+            ? 0 
+            : _calculateDistance(
+                widget.currentLocation!.latitude,
+                widget.currentLocation!.longitude,
+                note.location!.latitude,
+                note.location!.longitude,
+              );
+        message += '• You are ${distance.toStringAsFixed(0)} meters away from the target location\n';
+      }
+    }
+
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Note Not Available'),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  double _calculateDistance(double lat1, double lon1, double lat2, double lon2) {
+    const earthRadius = 6371000; // meters
+    final dLat = _toRadians(lat2 - lat1);
+    final dLon = _toRadians(lon2 - lon1);
+
+    final a = sin(dLat / 2) * sin(dLat / 2) +
+        cos(_toRadians(lat1)) * cos(_toRadians(lat2)) *
+        sin(dLon / 2) * sin(dLon / 2);
+    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
+
+    return earthRadius * c;
+  }
+
+  double _toRadians(double degree) {
+    return degree * pi / 180;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('Saved Notes (${notes.length})')),
-      body: notes.isEmpty
-          ? const Center(child: Text('No notes saved yet'))
+      appBar: AppBar(
+        title: Text(widget.showAvailableOnly 
+            ? 'Available Notes (${_filteredNotes.length})'
+            : 'All Notes (${_filteredNotes.length})'),
+      ),
+      body: _filteredNotes.isEmpty
+          ? Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.notes, size: 64, color: Colors.grey[400]),
+                  const SizedBox(height: 16),
+                  Text(
+                    widget.showAvailableOnly 
+                        ? 'No notes available to view'
+                        : 'No notes saved yet',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ],
+              ),
+            )
           : ListView.builder(
-              itemCount: notes.length,
+              itemCount: _filteredNotes.length,
               itemBuilder: (context, index) {
-                final note = notes[index];
+                final note = _filteredNotes[index];
+                final isAvailable = NotesService.isNoteTriggered(note, widget.currentLocation);
+                
                 return Card(
                   margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                  color: isAvailable && !note.hasBeenViewed 
+                      ? Colors.green[50]
+                      : null,
                   child: ListTile(
                     leading: CircleAvatar(
-                      child: Icon(note.isForSelf ? Icons.person : Icons.share, size: 20),
+                      backgroundColor: isAvailable
+                          ? (note.hasBeenViewed ? Colors.blue : Colors.green)
+                          : Colors.grey,
+                      child: Icon(
+                        note.isForSelf ? Icons.person : Icons.share,
+                        size: 20,
+                        color: Colors.white,
+                      ),
                     ),
                     title: Text('Note ${note.id.substring(note.id.length - 4)}'),
                     subtitle: Column(
@@ -531,9 +824,18 @@ class NotesListPage extends StatelessWidget {
                         Text('Created: ${DateFormat('yyyy-MM-dd HH:mm').format(note.createdAt)}'),
                         if (note.triggerDate != null)
                           Text('Triggers: ${DateFormat('yyyy-MM-dd HH:mm').format(note.triggerDate!)}'),
+                        if (!isAvailable)
+                          const Text('Status: Not available', style: TextStyle(color: Colors.red)),
+                        if (isAvailable && note.hasBeenViewed)
+                          const Text('Status: Viewed', style: TextStyle(color: Colors.blue)),
+                        if (isAvailable && !note.hasBeenViewed)
+                          const Text('Status: Available now!', style: TextStyle(color: Colors.green)),
                       ],
                     ),
-                    trailing: const Icon(Icons.lock),
+                    trailing: Icon(
+                      isAvailable ? Icons.lock_open : Icons.lock,
+                      color: isAvailable ? Colors.green : Colors.grey,
+                    ),
                     onTap: () => _viewNote(context, note),
                   ),
                 );
