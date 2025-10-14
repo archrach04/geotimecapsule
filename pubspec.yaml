@@ -18,6 +18,12 @@ dependencies:
   encrypt: ^5.0.1
   hive_flutter: ^1.1.0
   intl: ^0.18.1
+  image_picker: ^1.2.0
+  path_provider: ^2.1.5
+  file_picker: ^6.0.0
+  flutter_local_notifications: ^17.2.1
+  video_player: ^2.10.0
+  permission_handler: ^10.2.0
 
 dev_dependencies:
   flutter_test:

@@ -1,0 +1,1 @@
+ D:\\Programs\\College\\mobComp\\timeCapsule\\.dart_tool\\flutter_build\\3004bb88200fc3aaa44b92e0395b650d\\native_assets.yaml: 
