@@ -1,3 +1,5 @@
+import 'package:local_auth/local_auth.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
@@ -8,10 +10,98 @@ import 'package:intl/intl.dart';
 import 'dart:convert';
 import 'dart:math';
 
+class LoadingPage extends StatefulWidget {
+  const LoadingPage({super.key});
+
+  @override
+  State<LoadingPage> createState() => _LoadingPageState();
+}
+
+class _LoadingPageState extends State<LoadingPage> {
+  final LocalAuthentication auth = LocalAuthentication();
+  bool _isAuthenticating = false;
+  String _error = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _authenticate();
+  }
+
+  Future<void> _authenticate() async {
+    setState(() { _isAuthenticating = true; });
+    try {
+      bool didAuthenticate = await auth.authenticate(
+        localizedReason: 'Please authenticate to access Secure Geo Notes',
+        options: const AuthenticationOptions(biometricOnly: true),
+      );
+      if (didAuthenticate && mounted) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const SecureGeoNotesApp()),
+        );
+      } else {
+        setState(() { _error = 'Authentication failed.'; });
+      }
+    } on PlatformException catch (e) {
+      setState(() { _error = e.message ?? 'Error'; });
+    }
+    setState(() { _isAuthenticating = false; });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: Center(
+        child: _isAuthenticating
+            ? Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  SizedBox(
+                    height: 220,
+                    child: Image.asset('assets/tess.gif'),
+                  ),
+                  const SizedBox(height: 24),
+                  const Text('Authenticating...'),
+                ],
+              )
+            : _error.isNotEmpty
+                ? Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.error, color: Colors.red, size: 48),
+                      const SizedBox(height: 16),
+                      Text(_error),
+                      const SizedBox(height: 16),
+                      ElevatedButton(
+                        onPressed: _authenticate,
+                        child: const Text('Retry'),
+                      ),
+                    ],
+                  )
+                : Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      SizedBox(
+                        height: 220,
+                        child: Image.asset('assets/tess.gif'),
+                      ),
+                      const SizedBox(height: 24),
+                      const Text('Loading...'),
+                    ],
+                  ),
+      ),
+    );
+  }
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Hive.initFlutter();
-  runApp(const SecureGeoNotesApp());
+  runApp(const MaterialApp(
+    home: LoadingPage(),
+    debugShowCheckedModeBanner: false,
+  ));
 }
 
 class SecureGeoNotesApp extends StatelessWidget {
@@ -23,7 +113,36 @@ class SecureGeoNotesApp extends StatelessWidget {
       title: 'Secure Geo Notes',
       theme: ThemeData(
         useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFFFF0099),
+          brightness: Brightness.light,
+          primary: const Color(0xFFFF0099),
+          secondary: const Color(0xFFFF0099),
+        ),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Color(0xFFFF0099),
+          foregroundColor: Colors.white,
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFFFF0099),
+            foregroundColor: Colors.white,
+          ),
+        ),
+        floatingActionButtonTheme: const FloatingActionButtonThemeData(
+          backgroundColor: Color(0xFFFF0099),
+          foregroundColor: Colors.white,
+        ),
+        switchTheme: SwitchThemeData(
+          thumbColor: WidgetStateProperty.all(const Color(0xFFFF0099)),
+          trackColor: WidgetStateProperty.all(const Color(0xFFFFB3E6)),
+        ),
+        inputDecorationTheme: const InputDecorationTheme(
+          focusedBorder: OutlineInputBorder(
+            borderSide: BorderSide(color: Color(0xFFFF0099)),
+          ),
+          border: OutlineInputBorder(),
+        ),
       ),
       home: const HomePage(),
       debugShowCheckedModeBanner: false,
@@ -571,7 +690,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     onChanged: (val) => setState(() => _notesForSelf = val),
                   ),
                   DropdownButtonFormField<String>(
-                    value: _selectedMode,
+                    initialValue: _selectedMode,
                     decoration: const InputDecoration(
                       labelText: 'Trigger Mode',
                       border: OutlineInputBorder(),
