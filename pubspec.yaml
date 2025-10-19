@@ -1,7 +1,6 @@
 name: timecapsule
 description: A secure geolocation-based notes application
 
-publish_to: 'none'
 
 version: 1.0.0+1
 
@@ -12,12 +11,16 @@ dependencies:
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.2
-  latlong2: 0.9.1
+  latlong2: ^0.9.1
   geolocator: ^10.0.0
   flutter_map: ^5.0.0
   encrypt: ^5.0.1
   hive_flutter: ^1.1.0
   intl: ^0.18.1
+  local_auth: ^2.1.6
+  firebase_core: ^2.24.2
+  firebase_auth: ^4.16.0
+  cloud_firestore: ^4.13.0
 
 dev_dependencies:
   flutter_test:
@@ -28,3 +31,6 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/tess.gif
+
